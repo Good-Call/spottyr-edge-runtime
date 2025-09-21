@@ -29,8 +29,8 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/yourusername/spottyr-edge-runtime"
-"Bug Tracker" = "https://github.com/yourusername/spottyr-edge-runtime/issues"
+"Homepage" = "https://github.com/Good-Call/spottyr-edge-runtime"
+"Bug Tracker" = "https://github.com/Good-Call/spottyr-edge-runtime/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
