@@ -21,10 +21,10 @@ pip install spottyr-edge-runtime
 ### Dependencies
 
 The package requires Python 3.8+ and the following dependencies:
-- Pillow >= 10.0.0
-- numpy >= 1.25.0
+- Pillow >= 9.0.0
+- numpy >= 1.22.0
 - opencv-python >= 4.8.0.74
-- onnxruntime >= 1.16.0
+- onnxruntime >= 1.12.0
 
 ## Quick Start
 
@@ -127,7 +127,7 @@ def main():
         return
     
     image_path = sys.argv[1]
-    
+
     # Process image with your model
     prediction = process_image(image_path)
     
@@ -141,3 +141,4 @@ def main():
 if __name__ == "__main__":
     main()
 ```
+

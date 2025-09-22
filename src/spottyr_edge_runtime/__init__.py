@@ -4,5 +4,5 @@ SpottyrEdgeRuntime - A Python package for running Spottyr workflow on edge devic
 
 from .workflow import SpottyrWorkflow, WorkflowResult
 
-__version__ = "0.1.2"
+__version__ = "0.1.4"
 __all__ = ["SpottyrWorkflow", "WorkflowResult"]
