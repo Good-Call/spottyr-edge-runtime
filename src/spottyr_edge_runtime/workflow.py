@@ -3,6 +3,7 @@ Main workflow module for SpottyrWorkflow package.
 """
 
 import json
+import logging
 import sys
 import zipfile
 import tempfile
@@ -56,9 +57,9 @@ class WorkflowResult:
     def __str__(self) -> str:
         """String representation of the workflow result."""
         if self.success:
-            return f"WorkflowResult(success=True, prediction={self.prediction})"
+            return str(self.prediction)
         else:
-            return f"WorkflowResult(success=False, error='{self.error}')"
+            return f"Error: {self.error}"
 
     def __repr__(self) -> str:
         """Detailed string representation of the workflow result."""
@@ -70,13 +71,39 @@ class SpottyrWorkflow:
     A workflow management class with ZIP file handling capabilities.
     """
 
-    def __init__(self):
-        """Initialize the SpottyrWorkflow instance."""
+    def __init__(self, log_level: Union[int, str] = logging.ERROR):
+        """
+        Initialize the SpottyrWorkflow instance.
+
+        Args:
+            log_level: The logging level for the workflow. Can be an integer (logging.DEBUG,
+                      logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL) or
+                      a string ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL').
+                      Default is logging.ERROR.
+        """
+        # Set up logging
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+
+        # Handle string log levels
+        if isinstance(log_level, str):
+            log_level = getattr(logging, log_level.upper(), logging.ERROR)
+
+        self.logger.setLevel(log_level)
+
+        # Create console handler if none exists
+        if not self.logger.handlers:
+            console_handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            console_handler.setFormatter(formatter)
+            self.logger.addHandler(console_handler)
+
         self.loaded_path: Optional[Path] = None
         self.extracted_path: Optional[Path] = None
         self.models: Dict[str, ort.InferenceSession] = {}  # Multiple ONNX model sessions
         self.models_config: Dict[str, Dict[str, Any]] = {}  # Model configurations from JSON
         self.workflow_config: Optional[Dict[str, Any]] = None  # Overall workflow configuration
+
+        self.logger.info("SpottyrWorkflow initialized with log level: %s", logging.getLevelName(log_level))
 
     def load(self, file_path: Union[str, Path], extract_to: Optional[Union[str, Path]] = None) -> Path:
         """
@@ -95,18 +122,22 @@ class SpottyrWorkflow:
             zipfile.BadZipFile: If the file is not a valid ZIP file
         """
         file_path = Path(file_path)
+        self.logger.debug(f"Attempting to load path: {file_path}")
 
         # Check if the file/directory exists
         if not file_path.exists():
+            self.logger.error(f"Path not found: {file_path}")
             raise FileNotFoundError(f"Path not found: {file_path}")
 
         # If it's a directory, use it directly
         if file_path.is_dir():
+            self.logger.info(f"Loading directory directly: {file_path}")
             self.loaded_path = file_path
             self.extracted_path = file_path
         else:
             # Check if it's a ZIP file
             if not zipfile.is_zipfile(file_path):
+                self.logger.error(f"File is not a valid ZIP file: {file_path}")
                 raise zipfile.BadZipFile(f"File is not a valid ZIP file: {file_path}")
 
             # Determine extraction directory
@@ -114,6 +145,8 @@ class SpottyrWorkflow:
                 extract_to = file_path.parent / file_path.stem
             else:
                 extract_to = Path(extract_to)
+
+            self.logger.info(f"Extracting ZIP file {file_path} to {extract_to}")
 
             # Create extraction directory if it doesn't exist
             extract_to.mkdir(parents=True, exist_ok=True)
@@ -125,10 +158,12 @@ class SpottyrWorkflow:
             # Store the paths for reference
             self.loaded_path = file_path
             self.extracted_path = extract_to
+            self.logger.debug(f"Successfully extracted ZIP file to: {extract_to}")
 
         # Automatically load ONNX model if signature.json is present
         config_path = self.extracted_path / "signature.json"
         if config_path.exists():
+            self.logger.debug(f"Found signature.json, loading configuration: {config_path}")
             try:
                 with open(config_path, 'r') as config_file:
                     config_data = json.load(config_file)
@@ -140,10 +175,15 @@ class SpottyrWorkflow:
                         model_path = model_info.get("path")
                         if model_path:
                             full_model_path = self.extracted_path / model_path
+                            self.logger.debug(f"Loading model '{model_name}' from: {full_model_path}")
                             self.load_model(full_model_path, model_name)
+
+                self.logger.info(f"Successfully loaded workflow configuration with {len(self.models)} models")
             except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
                 # If config loading fails, continue without the model
-                print(f"Warning: Could not load workflow config: {e}")
+                self.logger.warning(f"Could not load workflow config: {e}")
+        else:
+            self.logger.debug("No signature.json found, skipping automatic model loading")
 
         return self.extracted_path
 
@@ -161,20 +201,29 @@ class SpottyrWorkflow:
             RuntimeError: If no package has been loaded/extracted or no models are loaded
             FileNotFoundError: If main.py doesn't exist in the extracted package
         """
+        self.logger.debug("Starting workflow execution")
+
         if self.extracted_path is None:
+            self.logger.error("No package loaded. Call load() first to extract a workflow package.")
             raise RuntimeError("No package loaded. Call load() first to extract a workflow package.")
 
         if not self.models:
+            self.logger.error("No ONNX models loaded. Models are required for workflow execution.")
             raise RuntimeError("No ONNX models loaded. Models are required for workflow execution.")
 
         # Check if main.py exists in the extracted directory
         main_py_path = self.extracted_path / "main.py"
         if not main_py_path.exists():
+            self.logger.error(f"main.py not found in extracted package: {self.extracted_path}")
             raise FileNotFoundError(f"main.py not found in extracted package: {self.extracted_path}")
+
+        self.logger.debug(f"Found main.py at: {main_py_path}")
 
         # Create a temporary file for the image
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_image:
             temp_image_path = temp_image.name
+
+        self.logger.debug(f"Created temporary image file: {temp_image_path}")
 
         # Initialize result variable with a default error value
         result_to_return: WorkflowResult = WorkflowResult({"error": "Unknown error occurred"})
@@ -183,8 +232,10 @@ class SpottyrWorkflow:
             # Save the PIL Image to the temporary file as JPEG (no alpha channel needed)
             # Convert to RGB if image has alpha channel to ensure JPEG compatibility
             if image.mode in ('RGBA', 'LA'):
+                self.logger.debug(f"Converting image from {image.mode} to RGB")
                 image = image.convert('RGB')
             image.save(temp_image_path, format='JPEG', quality=95)
+            self.logger.debug("Image saved to temporary file")
 
             # Import the workflow's main module and set the pre-loaded model
             import importlib.util
@@ -196,10 +247,12 @@ class SpottyrWorkflow:
             sys.path.insert(0, str(self.extracted_path))
 
             try:
+                self.logger.debug("Loading workflow module")
                 spec.loader.exec_module(workflow_module)
 
                 # Check if the module has the set_preloaded_model function
                 if hasattr(workflow_module, 'set_preloaded_model'):
+                    self.logger.debug("Setting preloaded models in workflow module")
                     # Pass all pre-loaded models to the workflow
                     workflow_module.set_preloaded_model(self.models, self.models_config)
 
@@ -211,6 +264,7 @@ class SpottyrWorkflow:
                 from io import StringIO
                 import contextlib
 
+                self.logger.debug("Executing workflow main function")
                 stdout_capture = StringIO()
                 with contextlib.redirect_stdout(stdout_capture):
                     workflow_module.main()
@@ -221,14 +275,19 @@ class SpottyrWorkflow:
                 # Parse the captured output
                 output = stdout_capture.getvalue().strip()
                 if output:
+                    self.logger.debug(f"Workflow output received: {output[:100]}...")  # Log first 100 chars
                     try:
                         output_data = json.loads(output)
                         result_to_return = WorkflowResult(output_data)
+                        self.logger.info("Workflow execution completed successfully")
                     except json.JSONDecodeError as e:
                         error_msg = f"Failed to parse workflow output as JSON: {e}\nOutput: {output}"
+                        self.logger.error(error_msg)
                         result_to_return = WorkflowResult({"error": error_msg})
                 else:
-                    result_to_return = WorkflowResult({"error": "No output from workflow"})
+                    error_msg = "No output from workflow"
+                    self.logger.warning(error_msg)
+                    result_to_return = WorkflowResult({"error": error_msg})
 
             finally:
                 # Restore original sys.path
@@ -237,13 +296,15 @@ class SpottyrWorkflow:
         except Exception as e:
             # Handle any unexpected exceptions during image saving or execution
             error_msg = f"Unexpected error during workflow execution: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
             result_to_return = WorkflowResult({"error": error_msg})
         finally:
             # Clean up the temporary image file
             try:
                 os.unlink(temp_image_path)
+                self.logger.debug("Cleaned up temporary image file")
             except OSError:
-                pass  # Ignore cleanup errors
+                self.logger.warning("Failed to clean up temporary image file")
 
         return result_to_return
 
@@ -260,16 +321,21 @@ class SpottyrWorkflow:
             RuntimeError: If there is an error loading the model
         """
         model_path = Path(model_path)
+        self.logger.debug(f"Attempting to load ONNX model: {model_path}")
 
         # Check if the model file exists
         if not model_path.exists():
+            self.logger.error(f"ONNX model file not found: {model_path}")
             raise FileNotFoundError(f"ONNX model file not found: {model_path}")
 
         # Load the ONNX model
         try:
             model_name = model_name or model_path.stem  # Use file stem as model name if not provided
+            self.logger.debug(f"Loading ONNX model '{model_name}' from: {model_path}")
             self.models[model_name] = ort.InferenceSession(str(model_path))
+            self.logger.info(f"Successfully loaded ONNX model: {model_name}")
         except Exception as e:
+            self.logger.error(f"Error loading ONNX model '{model_name}': {e}")
             raise RuntimeError(f"Error loading ONNX model: {e}")
 
     def predict(self, input_data: Any, model_name: Optional[str] = None) -> Any:
@@ -287,16 +353,24 @@ class SpottyrWorkflow:
         Raises:
             RuntimeError: If no model is loaded or if there is an error during inference
         """
+        self.logger.debug(f"Running prediction with model: {model_name or 'default'}")
+
         if not self.models:
+            self.logger.error("No ONNX models loaded. Call load_model() first.")
             raise RuntimeError("No ONNX models loaded. Call load_model() first.")
 
         # Use the specified model or the first loaded model
         model = self.models.get(model_name) or next(iter(self.models.values()))
+        actual_model_name = model_name or next(iter(self.models.keys()))
+        self.logger.debug(f"Using model: {actual_model_name}")
 
         # Run inference
         try:
             ort_inputs = {model.get_inputs()[0].name: input_data}
+            self.logger.debug("Running ONNX model inference")
             ort_outs = model.run(None, ort_inputs)
+            self.logger.debug("ONNX model inference completed successfully")
             return ort_outs
         except Exception as e:
+            self.logger.error(f"Error during ONNX model inference: {e}")
             raise RuntimeError(f"Error during ONNX model inference: {e}")
